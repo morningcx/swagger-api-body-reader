@@ -6,6 +6,7 @@ import com.alibaba.fastjson.JSONObject;
 import com.fasterxml.classmate.ResolvedType;
 import com.fasterxml.classmate.TypeResolver;
 import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.core.annotation.Order;
 import org.springframework.http.HttpStatus;
@@ -41,7 +42,7 @@ import java.util.Map;
 @ConditionalOnProperty(prefix = "swagger", name = "enable", havingValue = "true")
 public class ApiBodyReader implements ApiListingBuilderPlugin {
 
-    private static final Logger log = org.slf4j.LoggerFactory.getLogger(ApiBodyReader.class);
+    private static final Logger log = LoggerFactory.getLogger(ApiBodyReader.class);
 
     @Override
     public boolean supports(DocumentationType delimiter) {
