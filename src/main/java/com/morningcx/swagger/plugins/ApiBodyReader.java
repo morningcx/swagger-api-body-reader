@@ -5,6 +5,7 @@ import com.alibaba.fastjson.JSONArray;
 import com.alibaba.fastjson.JSONObject;
 import com.fasterxml.classmate.ResolvedType;
 import com.fasterxml.classmate.TypeResolver;
+import javafx.util.Pair;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -14,7 +15,10 @@ import org.springframework.stereotype.Component;
 import springfox.documentation.builders.ApiListingBuilder;
 import springfox.documentation.builders.ModelBuilder;
 import springfox.documentation.builders.ModelPropertyBuilder;
-import springfox.documentation.schema.*;
+import springfox.documentation.schema.Model;
+import springfox.documentation.schema.ModelProperty;
+import springfox.documentation.schema.ModelRef;
+import springfox.documentation.schema.Types;
 import springfox.documentation.service.ApiDescription;
 import springfox.documentation.service.Operation;
 import springfox.documentation.service.Parameter;
@@ -26,7 +30,7 @@ import springfox.documentation.swagger.common.SwaggerPluginSupport;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
-import java.util.Collection;
+import java.lang.reflect.Type;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -53,47 +57,43 @@ public class ApiBodyReader implements ApiListingBuilderPlugin {
     public void apply(ApiListingContext context) {
         try {
             if (context.getResourceGroup().getControllerClass().isPresent()) {
-                String reqPrefix = ApiRequestBody.class.getSimpleName();
-                String respPrefix = ApiResponseBody.class.getSimpleName();
-                Class<?> controllerClass = context.getResourceGroup().getControllerClass().get();
-                String controllerName = controllerClass.getSimpleName();
+                Class<?> clazz = context.getResourceGroup().getControllerClass().get();
+                String reqPrefix = join(ApiRequestBody.class.getSimpleName(), clazz.getSimpleName());
+                String respPrefix = join(ApiResponseBody.class.getSimpleName(), clazz.getSimpleName());
                 ApiListingBuilder apiListingBuilder = context.apiListingBuilder();
                 Map<String, Model> models = getDeclaredField(apiListingBuilder, "models");
                 List<ApiDescription> apis = getDeclaredField(apiListingBuilder, "apis");
-                for (Method method : controllerClass.getDeclaredMethods()) {
-                    String suffix = join(controllerName, method.getName());
+                Map<String, ModelRef> modelRefs = new HashMap<>(apis.size());
+                for (Method method : clazz.getDeclaredMethods()) {
                     ApiRequestBody reqBody = method.getAnnotation(ApiRequestBody.class);
                     ApiResponseBody respBody = method.getAnnotation(ApiResponseBody.class);
                     if (reqBody != null) {
-                        generateModel(models, join(reqPrefix, suffix), JSON.parse(reqBody.value()));
+                        String name = join(reqPrefix, method.getName());
+                        modelRefs.put(name, generateModel(models, name, JSON.parse(reqBody.value())).getValue());
                     }
                     if (respBody != null) {
-                        generateModel(models, join(respPrefix, suffix), JSON.parse(respBody.value()));
+                        String name = join(respPrefix, method.getName());
+                        modelRefs.put(name, generateModel(models, name, JSON.parse(respBody.value())).getValue());
                     }
                 }
                 for (ApiDescription api : apis) {
-                    String suffix = join(controllerName, api.getDescription());
-                    Model reqModel = models.get(join(reqPrefix, suffix));
-                    Model respModel = models.get(join(respPrefix, suffix));
-                    if (reqModel != null) {
+                    ModelRef reqModelRef = modelRefs.get(join(reqPrefix, api.getDescription()));
+                    ModelRef respModelRef = modelRefs.get(join(respPrefix, api.getDescription()));
+                    if (reqModelRef != null) {
                         for (Operation operation : api.getOperations()) {
                             for (Parameter parameter : operation.getParameters()) {
                                 if ("body".equals(parameter.getParamType())) {
-                                    ModelReference modelRef = parameter.getModelRef();
-                                    setDeclaredField(parameter, "modelRef", new ModelRef(reqModel.getName(),
-                                            modelRef.isCollection() ? new ModelRef(reqModel.getName()) : null));
+                                    setDeclaredField(parameter, "modelRef", reqModelRef);
                                 }
                             }
                         }
                     }
-                    if (respModel != null) {
+                    if (respModelRef != null) {
                         for (Operation operation : api.getOperations()) {
                             for (ResponseMessage respMsg : operation.getResponseMessages()) {
-                                // responseModel不为null则说明returnType不为void
-                                ModelReference responseModel = respMsg.getResponseModel();
-                                if (respMsg.getCode() == HttpStatus.OK.value() && responseModel != null) {
-                                    setDeclaredField(respMsg, "responseModel", new ModelRef(respModel.getName(),
-                                            responseModel.isCollection() ? new ModelRef(respModel.getName()) : null));
+                                // getResponseModel不为null则说明returnType不为void
+                                if (respMsg.getCode() == HttpStatus.OK.value() && respMsg.getResponseModel() != null) {
+                                    setDeclaredField(respMsg, "responseModel", respModelRef);
                                 }
                             }
                         }
@@ -105,8 +105,8 @@ public class ApiBodyReader implements ApiListingBuilderPlugin {
         }
     }
 
-    private ResolvedType generateModel(Map<String, Model> models, String name, Object obj) {
-        ResolvedType resolvedType;
+    private Pair<ResolvedType, ModelRef> generateModel(Map<String, Model> models, String name, Object obj) {
+        Pair<ResolvedType, ModelRef> typeRefPair;
         TypeResolver resolver = new TypeResolver();
         if (obj instanceof JSONObject) {
             JSONObject jsonObject = (JSONObject) obj;
@@ -115,35 +115,36 @@ public class ApiBodyReader implements ApiListingBuilderPlugin {
                 String[] keys = key.split("//");
                 key = keys[0].trim();
                 String refName = join(name, key);
-                ResolvedType type = generateModel(models, refName, value);
-                boolean isRef = models.containsKey(refName);
+                Pair<ResolvedType, ModelRef> pair = generateModel(models, refName, value);
                 properties.put(key, new ModelPropertyBuilder()
                         .name(key)
-                        .type(type)
-                        .example(isRef ? null : value)
+                        .type(pair.getKey())
+                        .example(models.containsKey(refName) ? null : value)
                         .description(keys.length > 1 ? keys[1].trim() : null)
                         .build()
-                        .updateModelRef(t -> Types.isBaseType(type)
-                                ? new ModelRef(Types.typeNameFor(type.getErasedType()))
-                                : new ModelRef(refName, type.isInstanceOf(Collection.class)
-                                ? new ModelRef(isRef ? refName : Types.typeNameFor(type.getTypeParameters().get(0).getErasedType()))
-                                : null)));
+                        .updateModelRef(t -> pair.getValue()));
             });
+            ResolvedType resolvedType = resolver.resolve(Object.class);
             models.put(name, new ModelBuilder()
                     .name(name)
-                    // 这里resolvedType不能为baseType，否则返回给上级递归的updateModelRef将会识别为基础类型
-                    .type(resolvedType = resolver.resolve(this.getClass()))
+                    .type(resolvedType)
                     .properties(properties)
                     .build());
+            typeRefPair = new Pair<>(resolvedType, new ModelRef(name));
         } else if (obj instanceof JSONArray) {
             JSONArray jsonArray = (JSONArray) obj;
-            resolvedType = resolver.resolve(Collection.class,
-                    generateModel(models, name, jsonArray.isEmpty() ? null : jsonArray.get(0)));
+            Object element = jsonArray.isEmpty() ? null : jsonArray.get(0);
+            Pair<ResolvedType, ModelRef> pair = generateModel(models, name, element);
+            ResolvedType resolvedType = resolver.resolve(List.class, pair.getKey());
+            typeRefPair = new Pair<>(resolvedType, new ModelRef(name, pair.getValue()));
         } else {
             // resolvedType为Void时会被忽略
-            resolvedType = resolver.resolve(obj == null ? Void.class : obj.getClass());
+            Type type = obj == null ? Void.class : obj.getClass();
+            ResolvedType resolvedType = resolver.resolve(type);
+            ModelRef modelRef = new ModelRef(Types.typeNameFor(type));
+            typeRefPair = new Pair<>(resolvedType, modelRef);
         }
-        return resolvedType;
+        return typeRefPair;
     }
 
     private String join(CharSequence... elements) {
