@@ -69,11 +69,11 @@ public class ApiBodyReader implements ApiListingBuilderPlugin {
                     ApiResponseBody respBody = method.getAnnotation(ApiResponseBody.class);
                     if (reqBody != null) {
                         String name = join(reqPrefix, method.getName());
-                        modelRefs.put(name, generateModel(models, name, JSON.parse(reqBody.value())).getValue());
+                        modelRefs.put(name, parse(models, name, JSON.parse(reqBody.value())).getValue());
                     }
                     if (respBody != null) {
                         String name = join(respPrefix, method.getName());
-                        modelRefs.put(name, generateModel(models, name, JSON.parse(respBody.value())).getValue());
+                        modelRefs.put(name, parse(models, name, JSON.parse(respBody.value())).getValue());
                     }
                 }
                 for (ApiDescription api : apis) {
@@ -105,7 +105,7 @@ public class ApiBodyReader implements ApiListingBuilderPlugin {
         }
     }
 
-    private Pair<ResolvedType, ModelRef> generateModel(Map<String, Model> models, String name, Object obj) {
+    private Pair<ResolvedType, ModelRef> parse(Map<String, Model> models, String name, Object obj) {
         Pair<ResolvedType, ModelRef> typeRefPair;
         TypeResolver resolver = new TypeResolver();
         if (obj instanceof JSONObject) {
@@ -115,7 +115,7 @@ public class ApiBodyReader implements ApiListingBuilderPlugin {
                 String[] keys = key.split("//");
                 key = keys[0].trim();
                 String refName = join(name, key);
-                Pair<ResolvedType, ModelRef> pair = generateModel(models, refName, value);
+                Pair<ResolvedType, ModelRef> pair = parse(models, refName, value);
                 properties.put(key, new ModelPropertyBuilder()
                         .name(key)
                         .type(pair.getKey())
@@ -134,7 +134,7 @@ public class ApiBodyReader implements ApiListingBuilderPlugin {
         } else if (obj instanceof JSONArray) {
             JSONArray jsonArray = (JSONArray) obj;
             Object element = jsonArray.isEmpty() ? null : jsonArray.get(0);
-            Pair<ResolvedType, ModelRef> pair = generateModel(models, name, element);
+            Pair<ResolvedType, ModelRef> pair = parse(models, name, element);
             ResolvedType resolvedType = resolver.resolve(List.class, pair.getKey());
             typeRefPair = new Pair<>(resolvedType, new ModelRef(name, pair.getValue()));
         } else {
