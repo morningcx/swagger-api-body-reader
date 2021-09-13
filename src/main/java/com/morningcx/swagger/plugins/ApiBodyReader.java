@@ -113,9 +113,9 @@ public class ApiBodyReader implements ApiListingBuilderPlugin {
             Map<String, ModelProperty> properties = new HashMap<>(jsonObject.size());
             jsonObject.forEach((key, value) -> {
                 String[] keys = key.split("//");
-                key = keys[0].trim();
-                String refName = join(name, key);
+                String refName = join(name, key = keys[0].trim());
                 Pair<ResolvedType, ModelRef> pair = parse(models, refName, value);
+                value = value instanceof String ? "\"" + value + "\"" : value;
                 properties.put(key, new ModelPropertyBuilder()
                         .name(key)
                         .type(pair.getKey())
